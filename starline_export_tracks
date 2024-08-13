@@ -1,0 +1,291 @@
+#!./dist/python3/bin/python3
+import logging, argparse, pickle, hashlib, requests, sys, json
+from datetime import datetime
+from gpx import GPX
+from gpx import Metadata
+from gpx import Person
+from gpx import Route
+from gpx import Waypoint
+import simplekml
+from base64 import b64decode
+
+logger = logging.getLogger(__name__)
+
+__author__ = "Artemyev Andrey <whyberg@yandex.ru>"
+__date__ = "06.08.2024"
+
+acode = 4
+app_secret_base = 'ZzM0b2dsZzMybGcyZ0dHRzN5MnV5M2dsMmdhMjI='
+slid_url_base = 'aHR0cHM6Ly9pZC5zdGFybGluZS5ydS8='
+slnet_url_base = 'aHR0cHM6Ly9wcm9kLW1vYmFwcC5zdGFybGluZS5ydS8='
+app_secret = b64decode(app_secret_base).decode("utf-8")
+slid_url = b64decode(slid_url_base).decode("utf-8")
+slnet_url = b64decode(slnet_url_base).decode("utf-8")
+config = {}
+
+def get_app_code():
+    global config
+    logger.debug('execute request: {}'.format(slid_url+'apiV3/application/getCode/'))
+    params = {
+        'appId': 4,
+        'secret': hashlib.md5(app_secret.encode('utf-8')).hexdigest()
+    }
+    r = requests.get(slid_url+'apiV3/application/getCode/', params=params)
+    response = r.json()
+    logger.debug('params : {}'.format(params))
+    logger.debug('response info: {}'.format(r))
+    logger.debug('response data: {}'.format(response))
+    if int(response['state']) == 1:
+        config['app_code'] = response['desc']['code']
+        logger.info('Application code: {}'.format(config['app_code']))
+        return
+    raise Exception(response)
+
+def get_app_token():
+    global config
+    logger.debug('execute request: {}'.format(slid_url+'apiV3/application/getToken/'))
+    params = {
+        'appId': acode,
+        'secret': hashlib.md5((app_secret + config['app_code']).encode('utf-8')).hexdigest()
+    }
+    r = requests.get(slid_url+'apiV3/application/getToken/', params=params)
+    response = r.json()
+    logger.debug('params : {}'.format(params))
+    logger.debug('response info: {}'.format(r))
+    logger.debug('response data: {}'.format(response))
+    if int(response['state']) == 1:
+        config['app_token'] = response['desc']['token']
+        logger.info('Application token: {}'.format(config['app_token']))
+        return
+    raise Exception(response)
+
+def get_slid_user_token(otp_password):
+    global config
+    logger.debug('execute request: {}'.format(slid_url+'apiV3/user/loginByOtp/'))
+    params = {
+        'token': config['app_token']
+    }
+    data = {
+        'otp': otp_password
+    }
+    r = requests.post(slid_url+'apiV3/user/loginByOtp/', params=params, data=data)
+    response = r.json()
+    logger.debug('params : {}'.format(params))
+    logger.debug('response info: {}'.format(r))
+    logger.debug('response data: {}'.format(response))
+    if int(response['state']) == 1:
+        config['slid_token'] = response['desc']['user_token']
+        logger.info('SLID token: {}'.format(config['slid_token']))
+        return
+    del(config['app_token'])
+    del(config['app_code'])
+    config_save(config)
+    raise Exception(response)
+
+def get_slnet_token():
+    global config
+    logger.debug('execute request: {}'.format(slnet_url+'json/v2/auth.slid'))
+    data = {
+        'slid_token': config['slid_token']
+    }
+    r = requests.post(slnet_url+'json/v2/auth.slid', json=data)
+    response = r.json()
+    logger.debug('response info: {}'.format(r))
+    logger.debug('response data: {}'.format(response))
+    config['slnet_token'] = r.cookies["slnet"]
+    config['slnet_user_id'] = response['user_id']
+    return
+
+
+def slid_logout():
+    global config
+    params = {
+        'token': config['app_token']
+    }
+    data = {
+        'user_token': config['slid_token']
+    }
+    r = requests.post(slid_url+'apiV3/user/logout/', params=params, data=data)
+    response = r.json()
+    logger.debug('params : {}'.format(params))
+    logger.debug('response info: {}'.format(r))
+    logger.debug('response data: {}'.format(response))
+    if int(response['state']) == 1 or ( int(response['state']) == 0 and response['desc']['message'] == 'Unauthorized.' ):
+        logger.info('Session closed for SLID token: {}'.format(config['slid_token']))
+        del(config['slid_token'])
+        del(config['slnet_token'])
+        return
+    raise Exception(response)
+
+def list_devices():
+    global config
+    logger.debug('execute request: {}'.format(slnet_url+"json/v2/user/{}/user_info".format(config['slnet_user_id'])))
+    cookies = {
+        "slnet": config['slnet_token']
+    }
+    r = requests.get(slnet_url+"json/v2/user/{}/user_info".format(config['slnet_user_id']), cookies= cookies)
+    response = r.json()
+    print ('{:<20}{:<20}{:<20}{:<8}{:<6}'.format('Device_id','Alias','IMEI','Battery','Status'))
+    for i in response['devices']:
+        print('{:<20}{:<20}{:<20}{:<8}{:<6}'.format(\
+                          i['device_id'], \
+                          i['alias'], \
+                          i['imei'], \
+                          i['battery'], \
+                          i['status']))
+    return
+
+def get_ways(device_id, time_from, time_to):
+    global config
+    logger.debug('execute request: {}'.format(slnet_url+"/json/v1/device/{}/ways".format(device_id)))
+    cookies = {
+        "slnet": config['slnet_token']
+    }
+    data = {
+       'begin': time_from,
+       'end': time_to,
+       'split_way': False,
+       'dt_max': 2,
+       'div_days': True,
+       'time_shift': 0,
+       'tz': True,
+       'filtering': True
+    }
+    r = requests.post(slnet_url+"/json/v1/device/{}/ways".format(device_id), cookies= cookies, data= json.dumps(data))
+    response = r.json()
+    logger.debug('execute response: {} {}'.format(response['code'],response['codestring']))
+    logger.debug(response['mileage'])
+    logger.debug(response['moving_time'])
+    logger.debug(response['waiting_time'])
+    return response
+
+def ways_export_gpx(ways):
+    gpx_t = GPX()
+    gpx_m = Metadata()
+    gpx_m.name=device_id
+    gpx_m.desc='Starline tracks'
+    gpx_t.metadata = gpx_m
+
+    for i in ways['way']:
+        if i['type']=='TZ':
+            continue
+        gpx_r = Route()
+        for j in i['nodes']:
+            wp = Waypoint()
+            wp.lat = j['x']
+            wp.lon = j['y']
+            wp.ele = j['z']
+            wp.time = datetime.fromtimestamp(j['t'])
+            if 'sat_qty' in j:
+                wp.sat = j['sat_qty']
+            wp.sym = '{}'.format(j['mileage'])
+            gpx_r.rtepts.append(wp)
+            if int(j['mileage']) == 0:
+                route_start_point_time = datetime.fromtimestamp(j['t']).isoformat()
+        gpx_r.name="ROUTE {} mileage:{}".format(route_start_point_time,i['mileage'])
+        gpx_t.routes.append(gpx_r)
+    return gpx_t
+
+def ways_export_kml(ways):
+    kml = simplekml.Kml()
+    for i in ways['way']:
+        if i['type']=='TZ':
+            continue
+        kml_track = []
+        for j in i['nodes']:
+            kml_track.append((j['y'],j['x']))
+            if int(j['mileage']) == 0:
+                route_start_point_time = datetime.fromtimestamp(j['t']).isoformat()
+        lin = kml.newlinestring(name="ROUTE {} mileage:{}".format(route_start_point_time,i['mileage']),coords=kml_track)
+        lin.style.linestyle.width = 5
+        lin.style.linestyle.color = simplekml.Color.red
+    return kml
+
+def get_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--password", dest="otp", help="Account otp password", default="", required=False)
+    parser.add_argument("-x", "--logout", dest="logout", help="Logout", action='store_true', required=False)
+    parser.add_argument("-l", "--list-devices", dest="listdevices", help="List devices", action='store_true', required=False)
+    parser.add_argument("-d", "--debug", dest="debug", help="Debug", action='store_true', required=False)
+    parser.add_argument("-w", "--get-ways", dest="getways", help="Get ways for device_id", default="", required=False)
+    parser.add_argument("-f", "--time-from", dest="time_from", help="way start time", default="", required=False)
+    parser.add_argument("-t", "--time-to", dest="time_to", help="way stop time", default="", required=False)
+    parser.add_argument("-g", "--output-gpx", dest="gpxoutput", help="Output ways to gpx", action='store_true', default=False, required=False)
+    parser.add_argument("-k", "--output-kml", dest="kmloutput", help="Output ways to kml", action='store_true', default=False, required=False)
+    parser.add_argument("-n", "--file-name", dest="filename", help="output file name", default="", required=False)
+    args = parser.parse_args()
+    logger.debug('otpassword: {}'.format(args.otp))
+    return args
+
+def config_save(config):
+    with open('slget.cnf', 'wb') as handle:
+        pickle.dump(config, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+def config_load():
+    try:
+        with open('slget.cnf', 'rb') as handle:
+            return pickle.load(handle)
+    except FileNotFoundError:
+        return {}
+
+def main():
+    global config
+    logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.INFO)
+    args = get_args()
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+    config = config_load()    
+    if args.logout:
+        slid_logout()
+        config_save(config)
+        sys.exit()
+    if 'app_code' not in config:
+        get_app_code()
+        config_save(config)
+    if 'app_token' not in config:
+        get_app_token()
+        config_save(config)
+    if 'slid_token' not in config:
+        get_slid_user_token(args.otp)
+        config_save(config)
+    if 'slnet_token' not in config:
+        get_slnet_token()
+        config_save(config)
+    if args.listdevices:
+        list_devices()
+    if ( args.kmloutput or args.gpxoutput ) and args.filename == '':
+       raise Exception("Need file name ( -n ) for output results")
+    if args.getways != '':
+        if args.time_from == '':
+            raise Exception("Add -f [start time of track]")
+        time_from_t = int(datetime.fromisoformat(args.time_from).timestamp())
+        if args.time_to == '':
+            time_from_t += 86400
+        else:
+            time_from_t = int(datetime.fromisoformat(args.time_from).timestamp())
+        time_to_t = int(datetime.fromisoformat(args.time_to).timestamp())
+        if time_from_t >= time_to_t:
+            raise Exception("Time-from must be greater than time-to")
+        ways = get_ways(args.getways,time_from_t,time_to_t)
+        if args.gpxoutput:
+            ways_export_gpx(ways).to_file(args.filename)
+            sys.exit()
+        elif args.kmloutput:
+            ways_export_kml(ways).save(args.filename)
+            sys.exit()
+        else:
+            del(ways['code'])
+            del(ways['codestring'])
+            if args.filename:
+                with open(args.filename, 'w') as handle:
+                     print(ways, file=handle)
+            else:
+                print(ways)
+
+    logger.debug('GOOD: {}'.format(config))
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        logger.error(e)

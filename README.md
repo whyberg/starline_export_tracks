@@ -28,3 +28,39 @@ Start utility
 ```sh
 starline_export_tracks -h
 ```
+
+Authentication by OTP
+
+```sh
+starline_export_tracks -p 13461959
+```
+
+Get connected devices
+
+```sh
+starline_export_tracks -l
+```
+
+Export tracks to stdout json fomrat
+
+```sh
+starline_export_tracks -w [device_id from the previous request] -f [Start Date/Time] -t [Stop date/time]
+```
+
+Export tracks to file json format
+
+```sh
+starline_export_tracks -w [device_id from the previous request] -f [Start Date/Time] -t [Stop date/time] -n [filename]
+```
+
+Export tracks to file gpx format
+
+```sh
+starline_export_tracks -w [device_id from the previous request] -f [Start Date/Time] -t [Stop date/time] -g -n [filename]
+```
+
+Export tracks to file kml format
+
+```sh
+starline_export_tracks -w [device_id from the previous request] -f [Start Date/Time] -t [Stop date/time] -k -n [filename]
+```

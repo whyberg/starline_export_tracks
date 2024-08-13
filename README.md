@@ -1,5 +1,5 @@
 # starline_export_tracks
-Console utility for export GPS/GLONAS tracks from starline.ru to json/GPX/kml
+Console utility for export GPS/GLONAS tracks from starline.ru to json/GPX/kml.
 OTP authentication is used for access Starline.ru, you need get OTP from your StarLine 2 app
 
 ##  Prerequisites
